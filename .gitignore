@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Data / weights / logs
+data/
+runs/
+checkpoints/
+*.pth
+*.pt
+*.h5
+
+# Colab / VSCode
+.ipynb_checkpoints/
+.vscode/
