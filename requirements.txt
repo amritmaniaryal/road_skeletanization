@@ -1,0 +1,7 @@
+torch>=2.2
+torchvision
+tqdm          # ← new
+pyyaml        # ← new
+numpy
+pillow
+scikit-image
