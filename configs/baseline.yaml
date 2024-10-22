@@ -1,0 +1,4 @@
+seed: 42
+batch_size: 4
+lr: 1e-3
+epochs: 1        # keep 1 for smoke-test; change later
