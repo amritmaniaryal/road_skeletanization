@@ -1,0 +1,10 @@
+# Geospatial stack required only to (re)generate the synthetic dataset
+# from OpenStreetMap via `python -m src.make_data`.
+# Heaviest to install on macOS; easiest via conda:
+#   conda create -n road_skel python=3.13
+#   conda install -c conda-forge osmnx geopandas rasterio shapely
+#   pip install -r requirements-train.txt
+osmnx
+geopandas
+rasterio
+shapely

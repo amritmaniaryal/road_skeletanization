@@ -4,15 +4,13 @@ ckpt_dir: checkpoints
 
 batch_size: 4
 num_workers: 0
-epochs: 50
+epochs: 3
 lr: 0.001
 dice_weight: 0.5
 val_ratio: 0.2
 augment: true
 
-# model
 base_ch: 32
 depth: 3
 
-# device: auto (mps/cuda/cpu), or force e.g. "cpu"
 device: null

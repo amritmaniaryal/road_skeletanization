@@ -1,0 +1,9 @@
+# Core dependencies for training / evaluation (CPU or MPS).
+# Installed via:  pip install -r requirements-train.txt
+torch>=2.2
+torchvision
+numpy
+pillow
+pyyaml
+tqdm
+scikit-image

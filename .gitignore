@@ -4,9 +4,10 @@ __pycache__/
 *.egg-info/
 
 # Data / weights / logs
-data/
-runs/
-checkpoints/
+/data/
+/runs/
+/checkpoints/
+/cache/
 *.pth
 *.pt
 *.h5
@@ -14,3 +15,10 @@ checkpoints/
 # Colab / VSCode
 .ipynb_checkpoints/
 .vscode/
+
+# macOS
+.DS_Store
+
+# Environments
+.venv/
+env/
