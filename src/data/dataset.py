@@ -1,3 +1,4 @@
+import hashlib
 import os
 import random
 
@@ -5,6 +6,8 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+
+from src.corrupt import corrupt
 
 
 class RoadDataset(Dataset):
@@ -20,9 +23,12 @@ class RoadDataset(Dataset):
         seed: seed for the train/val split.
         val_ratio: fraction of samples held out for validation.
         augment: apply random horizontal/vertical flips (train only).
+        noise: dict passed to corrupt(); corrupts the *input mask only*.
+               The ground-truth skeleton stays the clean OSM centerline.
     """
 
-    def __init__(self, data_dir, split="train", seed=42, val_ratio=0.2, augment=False):
+    def __init__(self, data_dir, split="train", seed=42, val_ratio=0.2,
+                 augment=False, noise=None):
         ids = []
         for fname in sorted(os.listdir(data_dir)):
             if fname.startswith("image_") and fname.endswith(".png"):
@@ -44,9 +50,16 @@ class RoadDataset(Dataset):
 
         self.data_dir = data_dir
         self.augment = augment and split == "train"
+        self.noise = noise or {}
+        self._noise_seed = int(self.noise.get("seed", 42))
 
     def __len__(self):
         return len(self.ids)
+
+    def seed_for(self, sample_id):
+        """Deterministic per-sample corruption seed (stable across epochs)."""
+        digest = hashlib.md5(sample_id.encode()).hexdigest()
+        return self._noise_seed + int(digest[:8], 16) % (2 ** 31)
 
     def __getitem__(self, idx):
         sample_id = self.ids[idx]
@@ -57,8 +70,12 @@ class RoadDataset(Dataset):
             Image.open(os.path.join(self.data_dir, f"target_{sample_id}.png"))
         ).astype(np.float32) / 255.0
 
+        # corrupt the input mask only; ground truth skeleton stays clean
+        if self.noise.get("intensity", 0) > 0:
+            img = corrupt(img, self.noise, seed=self.seed_for(sample_id)).astype(np.float32)
+
         # (H, W) -> (1, H, W) in [0, 1]
-        img = torch.from_numpy(img).unsqueeze(0)
+        img = torch.from_numpy(img.astype(np.float32)).unsqueeze(0)
         target = torch.from_numpy(target).unsqueeze(0)
 
         if self.augment:

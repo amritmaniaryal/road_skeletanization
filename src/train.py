@@ -24,6 +24,7 @@ def main(cfg):
     train_ds = RoadDataset(
         data_dir, split="train", seed=cfg["seed"],
         val_ratio=cfg.get("val_ratio", 0.2), augment=cfg.get("augment", True),
+        noise=cfg.get("noise"),
     )
     val_ds = RoadDataset(
         data_dir, split="val", seed=cfg["seed"], val_ratio=cfg.get("val_ratio", 0.2),

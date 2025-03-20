@@ -10,6 +10,11 @@ dice_weight: 0.5
 val_ratio: 0.2
 augment: true
 
+# mask corruption (on-the-fly, input only; GT skeleton stays clean)
+noise:
+  intensity: 0.6
+  seed: 42
+
 # model
 base_ch: 32
 depth: 3
