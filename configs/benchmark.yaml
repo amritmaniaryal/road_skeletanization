@@ -1,0 +1,27 @@
+# Benchmark config: compare U-Net vs classical baselines across noise levels.
+seed: 42
+data_dir: data/thinning
+ckpt_dir: checkpoints
+
+batch_size: 4
+num_workers: 0
+val_ratio: 0.2
+
+# model
+base_ch: 32
+depth: 3
+
+# noise intensities to sweep (0 = clean)
+noise_levels: [0.0, 0.3, 0.6, 0.9]
+noise_seed: 42
+
+# methods to compare; the U-Net checkpoint is used for the 'unet' row
+methods: [unet, medial_axis, skeletonize, distance_ridge]
+ckpt: checkpoints/best.pth
+
+# skeleton metric tolerance (px)
+tol: 2
+
+out_dir: runs/benchmark
+
+device: null
