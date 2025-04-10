@@ -1,85 +1,115 @@
 # Road Skeletonization
 
-Predict thin road-centerline skeletons from thick road-network masks using a U-Net,
-on data synthesized from real OpenStreetMap road networks.
+Recover clean road-centerline skeletons from **imperfect** road masks, validated
+against authoritative OpenStreetMap vector data.
 
 ![Pipeline](docs/pipeline.png)
 
-Given a binary road mask (roads drawn as thick polygons whose width matches their
-highway class), the model outputs a probability map that should align with the thin
-1-px centerline skeleton of those roads. This is the "mask → centerline skeleton"
-segmentation problem.
+## The question this project answers
+
+Road centerlines are the bridge between pixels and routable graphs: thin 1-px
+lines that can be re-vectorized into junctions and segments. On a *perfect,
+clean* mask this is arguably just geometry — the medial axis (a generalized
+"divide by 2") already nails it. **Real masks are not clean.** They come from
+segmentation models on satellite imagery or noisy sources, with gaps, ragged
+edges, spurious blobs, shadows, and inconsistent widths.
+
+So the real question is:
+
+> **At what level of mask corruption does a learned model beat classical
+> skeletonization?**
+
+This project answers it with measurements: we synthesize road masks from real
+OSM road networks, corrupt them with a controlled noise model, and benchmark a
+trained U-Net against three deterministic baselines across clean→heavy noise.
 
 ## How it works
 
 ```
-OpenStreetMap ──> road network graph (osmnx) ──> crop tiles around intersections
+OpenStreetMap ──> road graph (osmnx) ──> rasterize thick mask + 1px skeleton
                                                      │
-                                                     v
-                                        rasterize thick mask + 1px skeleton
+                                     (mask is the input, skeleton is the GT)
                                                      │
-                                                     v
-                                              (image, target) pairs
+                              corrupt input masks on-the-fly (gaps, jitter,
+                              spurious blobs, occlusion, width variation)
                                                      │
+                          ┌──────────────────────────┴──────────────┐
+                          v                                         v
+                   U-Net (learned)                medial_axis / skeletonize /
+                                                  distance_ridge (classical)
+                          └──────────────────────────┬──────────────┘
                                                      v
-                                         U-Net  (mask ─> skeleton)
-                                                     │
-                                                     v
-                                      metrics + side-by-side visualizations
+                              skeleton-aware P/R/F1, Dice, IoU vs. OSM GT
 ```
 
-### 1. Data generation (`src/make_data.py`)
-- Fetches the OSM road network for a place (default: Oxford, Ohio) via `osmnx`.
-- Projects it to a local UTM zone and caches edges/nodes as GeoPackages in `cache/`.
-- Samples crop centers around road intersections, then for each crop renders:
-  - `image_XXXXX.png` — the thick road mask (each road buffered by a random width
-    sampled from `DEFAULT_THICKNESS` according to its `highway` tag),
-  - `target_XXXXX.png` — the thin 1-px centerline skeleton of the same roads,
-  - `target_XXXXX.geojson` — the exact vector linework (for graph-based eval later).
-- All tiles are 256×256 at a ground resolution of ~1 m/pixel.
+### Key design choice: OSM lines as ground truth, corruption as input noise
 
-### 2. Dataset (`src/data/dataset.py`)
-- `RoadDataset` loads the `image_*`/`target_*` pairs, normalizes to `[0, 1]`,
-  and applies a deterministic 80/20 train/val split (seeded).
-- Optional random flips for training.
+Both the clean mask *and* the skeleton target are rendered from the same OSM
+vector lines (`src/make_data.py`) — the mask is the road line buffered by its
+highway width, the skeleton is the raw 1-px centerline. The **input is then
+corrupted on-the-fly** (`src/corrupt.py`) while the ground truth stays clean.
+This avoids any circularity: the model can never cheat by memorizing the
+corruption, because corruption is randomized per sample and only ever touches
+the input.
 
-### 3. Model (`src/model.py`)
-- A compact U-Net: encoder (conv → max-pool) × 3, bottleneck, decoder with
-  bilinear upsampling + skip connections, and a 1×1 conv + sigmoid head.
-- ~1.5M params; runs comfortably on CPU and Apple MPS.
+### Corruption model (`src/corrupt.py`)
+Five operators simulate realistic detector failures, applied with a tunable
+intensity `0.0` (clean) → `1.0` (heavy):
 
-### 4. Training (`src/train.py`)
-- Loss: `BCE + 0.5 × soft-Dice`.
-- Optimizer: Adam (lr 1e-3). Tracks train loss and val loss / Dice / IoU.
-- Saves the best checkpoint (by val loss) to `checkpoints/best.pth` and the last
-  one to `checkpoints/last.pth`. All hyperparameters live in `configs/baseline.yaml`.
+| Operator | Simulates |
+|---|---|
+| `add_gaps` | broken segments (tree/car/cloud occlusion) |
+| `jitter_edges` | imperfect segmentation boundaries |
+| `spurious_blobs` | false-positive detections |
+| `partial_occlusion` | shadows, buildings |
+| `width_variation` | inconsistent detector widths |
 
-### 5. Evaluation (`src/evaluate.py`)
-- Loads a checkpoint and runs the validation split.
-- Reports `Dice`, `IoU`, `MSE`, and skeleton-aware precision/recall/F1
-  (a prediction pixel counts if it lies within `tol` px of ground truth, and vice
-  versa — tolerating the 1–2 px drift of skeleton prediction).
-- Writes side-by-side overlays (mask | GT skeleton | predicted skeleton) to `runs/`.
+Seeded per sample for reproducibility.
+
+### Baselines (`src/baselines.py`)
+Classical, deterministic methods that take a mask and return a 1px skeleton:
+
+- **`medial_axis`** — the generalized "divide by 2" (distance-transform ridge).
+- **`skeletonize`** — classic morphological thinning, known to spawn spurious
+  branches on noisy input.
+- **`distance_ridge`** — explicit distance-transform threshold + thin.
 
 ## Results
 
-Trained on 366 samples (Oxford, Ohio) for 50 epochs (~2 min on Apple MPS):
+Benchmark on 91 validation tiles, scored against the clean OSM skeleton with a
+±2 px skeleton tolerance (`runs/benchmark/results.csv`):
 
-| Metric | Value |
-|---|---|
-| Val Dice | 0.7535 |
-| Val IoU | 0.6060 |
-| MSE | 0.0045 |
-| Skeleton precision (tol=2) | 0.9999 |
-| Skeleton recall (tol=2) | 0.9839 |
-| Skeleton F1 (tol=2) | 0.9917 |
+| Noise | Method | Dice | IoU | Skeleton F1 |
+|---|---|---|---|---|
+| **clean (0.0)** | **U-Net** | **0.744** | **0.597** | **0.991** |
+| | medial_axis | 0.687 | 0.529 | 0.981 |
+| | skeletonize | 0.653 | 0.494 | 0.987 |
+| | distance_ridge | 0.550 | 0.409 | 0.838 |
+| **mild (0.3)** | **U-Net** | **0.727** | **0.578** | **0.983** |
+| | medial_axis | 0.634 | 0.475 | 0.948 |
+| | skeletonize | 0.612 | 0.454 | 0.961 |
+| | distance_ridge | 0.502 | 0.364 | 0.787 |
+| **moderate (0.6)** | **U-Net** | **0.663** | **0.514** | **0.929** |
+| | medial_axis | 0.499 | 0.356 | 0.838 |
+| | skeletonize | 0.491 | 0.350 | 0.851 |
+| | distance_ridge | 0.381 | 0.267 | 0.635 |
+| **heavy (0.9)** | **U-Net** | **0.595** | **0.448** | **0.850** |
+| | medial_axis | 0.399 | 0.270 | 0.744 |
+| | skeletonize | 0.388 | 0.262 | 0.750 |
+| | distance_ridge | 0.284 | 0.188 | 0.514 |
 
-Example overlays (left: input mask, middle: ground-truth skeleton, right: prediction):
+**Reading the table:** on clean masks the classical baselines are nearly
+competitive (skeleton F1 0.98–0.99) — confirming the "divide by 2" intuition.
+But their advantage collapses under noise: at heavy corruption they drop to
+F1 0.51–0.75, while the learned model holds 0.85 and keeps ~10 points of F1
+ahead of the best baseline. The U-Net's edge grows monotonically with noise.
 
-![sample 0](examples/sample_000.png)
-![sample 1](examples/sample_001.png)
-![sample 2](examples/sample_002.png)
-![sample 3](examples/sample_003.png)
+Example overlays (heavy noise, columns: corrupted mask | ground-truth skeleton |
+U-Net | medial_axis | skeletonize | distance_ridge):
+
+![benchmark 0](examples/benchmark_000.png)
+![benchmark 1](examples/benchmark_001.png)
+![benchmark 2](examples/benchmark_002.png)
 
 ## Setup
 
@@ -91,8 +121,9 @@ conda install -n road_skel -c conda-forge osmnx geopandas rasterio shapely
 conda run -n road_skel pip install -r requirements-train.txt
 ```
 
-If you only want to train/eval on an existing dataset, `requirements-train.txt`
-suffices — the geospatial stack is only needed for data generation.
+If you only want to train/eval/benchmark on an existing dataset,
+`requirements-train.txt` suffices — the geospatial stack is only needed to
+regenerate data.
 
 ## Usage
 
@@ -100,12 +131,11 @@ suffices — the geospatial stack is only needed for data generation.
 # 1. Generate the dataset (downloads OSM data on first run)
 conda run -n road_skel python -m src.make_data --config oxford-town --n_samples 500
 
-# 2. Train
+# 2. Train the noise-augmented U-Net (corrupts input masks on-the-fly)
 conda run -n road_skel python -m src.train --config configs/baseline.yaml
 
-# 3. Evaluate the best checkpoint and write visualizations
-conda run -n road_skel python -m src.evaluate \
-    --config configs/baseline.yaml --ckpt checkpoints/best.pth --out runs/eval_full
+# 3. Benchmark U-Net vs classical baselines across noise levels
+conda run -n road_skel python -m src.benchmark --config configs/benchmark.yaml
 ```
 
 To quickly check everything works end-to-end, use `configs/smoke.yaml`
@@ -113,26 +143,43 @@ To quickly check everything works end-to-end, use `configs/smoke.yaml`
 
 ## Reproducibility
 
-- Every random process (data sampling, train/val split, flips, model init) is
-  seeded from `configs/*.yaml` (`seed: 42`), so runs are reproducible.
-- The dataset is derived from a *snapshot* of OSM: the raw edges/nodes GeoPackages
-  are cached in `cache/`, so regenerating data does not require the network again.
+- Every random process (data sampling, train/val split, flips, corruption
+  seeds, model init) is seeded from `configs/*.yaml` (`seed: 42`).
+- Corruption is deterministic per sample (md5-derived seed), so benchmarks are
+  exactly reproducible.
+- The dataset is derived from a *snapshot* of OSM: raw edges/nodes are cached
+  in `cache/`, so regenerating data does not require the network again.
 
 ## Project layout
 
 ```
-configs/            # YAML hyperparameter configs
+configs/             # YAML hyperparameter / benchmark configs
 src/
-  make_data.py      # OSM -> rasterized mask/skeleton pairs
-  data/dataset.py   # PyTorch Dataset (image/target + train/val split)
-  model.py          # U-Net
-  metrics.py        # BCE+Dice loss; Dice/IoU/MSE; skeleton P/R/F1
-  train.py          # training loop
-  evaluate.py       # validation metrics + overlays
-  utils.py          # seed helpers
+  make_data.py       # OSM -> rasterized clean mask/skeleton pairs
+  corrupt.py         # noise model for imperfect input masks
+  baselines.py       # classical skeletonizers (medial_axis, skeletonize, distance_ridge)
+  data/dataset.py    # PyTorch Dataset (mask + on-the-fly corruption + split)
+  model.py           # U-Net
+  metrics.py         # BCE+Dice loss; Dice/IoU/MSE; skeleton P/R/F1
+  train.py           # training loop
+  evaluate.py        # single-model validation metrics + overlays
+  benchmark.py       # U-Net vs baselines, clean vs noisy, results table
+  utils.py           # seed / device helpers
 ```
 
 ## Requirements
 
-See `requirements-train.txt` (core) and `requirements-data.txt` (data generation).
-Tested with Python 3.13, torch 2.10, osmnx 2.1.1, geopandas 1.1.4, rasterio 1.5.1.
+See `requirements-train.txt` (core) and `requirements-data.txt` (data
+generation). Tested with Python 3.13, torch 2.10, osmnx 2.1.1, geopandas 1.1.4,
+rasterio 1.5.1.
+
+## Limitations & future work
+
+- **Synthetic noise only.** Corruption is a controlled model of detector
+  failures, not real imagery. The natural next step is validating on genuine
+  satellite-derived masks (e.g. the Massachusetts Roads dataset), reusing this
+  machinery unchanged — just point `data_dir` at real masks.
+- **Binary task.** The model thins any blob; distinguishing road vs. driveway
+  vs. sidewalk requires multi-class segmentation, out of scope here.
+- **Pixels, not graph.** Skeleton output is still pixels; vectorization to a
+  routable graph is the downstream step this project feeds into.
