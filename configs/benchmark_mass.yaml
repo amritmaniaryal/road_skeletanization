@@ -1,0 +1,22 @@
+# Benchmark on real Massachusetts Roads validation masks (no synthetic noise).
+seed: 42
+data_dir: data/mass_roads/patches
+ckpt_dir: checkpoints
+
+batch_size: 4
+num_workers: 0
+val_ratio: 1.0   # use every patch (the dataset IS the real validation set)
+
+# model
+base_ch: 32
+depth: 3
+
+noise_levels: [0.0]
+noise_seed: 42
+methods: [unet, medial_axis, skeletonize, distance_ridge]
+ckpt: checkpoints/best.pth
+tol: 2
+
+out_dir: runs/benchmark_mass
+
+device: null

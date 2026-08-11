@@ -111,6 +111,41 @@ U-Net | medial_axis | skeletonize | distance_ridge):
 ![benchmark 1](examples/benchmark_001.png)
 ![benchmark 2](examples/benchmark_002.png)
 
+## Real-data validation (Massachusetts Roads)
+
+To check the model generalizes beyond synthetic Oxford tiles, we evaluate it on
+the [Massachusetts Roads dataset](http://www.cs.toronto.edu/~vmnih/data/) (Mnih,
+2013): 14 real 1500×1500 validation road masks covering dense, irregular road
+networks. `src/make_mass_data.py` tiles them into 256×256 patches and rasterizes
+the dataset's own vector shapefile centerlines as ground truth (the shapefile is
+what the masks were generated from, so GT is independent of our predictions).
+This produced 312 patches.
+
+Trained on Oxford, the U-Net is evaluated zero-shot on the real masks, alongside
+the same classical baselines:
+
+| Split | Method | Dice | IoU | Skeleton F1 |
+|---|---|---|---|---|
+| **Mass (real)** | **U-Net** | **0.439** | **0.291** | **0.991** |
+| | medial_axis | 0.413 | 0.269 | 0.980 |
+| | skeletonize | 0.450 | 0.299 | 0.984 |
+| | distance_ridge | 0.442 | 0.297 | 0.977 |
+
+**Reading the table:** the U-Net keeps the highest skeleton F1 (0.991) on a
+completely different real road network, and 100% of its predictions land on the
+mask. Dice/IoU are far lower than on synthetic data (~0.44 vs ~0.74) because
+real dense networks leave little pixel-level slack — a reminder that skeleton
+F1 is the meaningful metric here. On these *clean* real masks the classical
+baselines stay close, reinforcing the synthetic result: the learned model's edge
+is robustness to *noise*, not centerline extraction on clean input.
+
+Example overlays (columns: real mask | GT skeleton | U-Net | medial_axis |
+skeletonize | distance_ridge):
+
+![mass 0](examples/mass_000.png)
+![mass 1](examples/mass_001.png)
+![mass 2](examples/mass_002.png)
+
 ## Setup
 
 The geospatial stack (osmnx/geopandas/rasterio) is easiest on macOS via conda:
@@ -136,6 +171,11 @@ conda run -n road_skel python -m src.train --config configs/baseline.yaml
 
 # 3. Benchmark U-Net vs classical baselines across noise levels
 conda run -n road_skel python -m src.benchmark --config configs/benchmark.yaml
+
+# 4. (optional) Benchmark on the real Massachusetts Roads validation set
+#    (downloads the dataset + shapefile on first run, then tiles them)
+conda run -n road_skel python -m src.make_mass_data
+conda run -n road_skel python -m src.benchmark --config configs/benchmark_mass.yaml
 ```
 
 To quickly check everything works end-to-end, use `configs/smoke.yaml`
@@ -156,6 +196,7 @@ To quickly check everything works end-to-end, use `configs/smoke.yaml`
 configs/             # YAML hyperparameter / benchmark configs
 src/
   make_data.py       # OSM -> rasterized clean mask/skeleton pairs
+  make_mass_data.py  # Massachusetts Roads -> tiled patches + vector GT
   corrupt.py         # noise model for imperfect input masks
   baselines.py       # classical skeletonizers (medial_axis, skeletonize, distance_ridge)
   data/dataset.py    # PyTorch Dataset (mask + on-the-fly corruption + split)
@@ -175,10 +216,11 @@ rasterio 1.5.1.
 
 ## Limitations & future work
 
-- **Synthetic noise only.** Corruption is a controlled model of detector
-  failures, not real imagery. The natural next step is validating on genuine
-  satellite-derived masks (e.g. the Massachusetts Roads dataset), reusing this
-  machinery unchanged — just point `data_dir` at real masks.
+- **Masks are real, but inputs are still masks.** The Massachusetts benchmark
+  validates generalization to real road networks on *clean* masks. Feeding
+  actual satellite/aerial imagery still requires an upstream road-extraction
+  model — the natural next step (e.g. train a segmenter on the imagery, then
+  run its noisy masks through this skeletonizer).
 - **Binary task.** The model thins any blob; distinguishing road vs. driveway
   vs. sidewalk requires multi-class segmentation, out of scope here.
 - **Pixels, not graph.** Skeleton output is still pixels; vectorization to a
